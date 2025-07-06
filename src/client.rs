@@ -9,6 +9,7 @@ use tokio::sync::Notify;
 use tokio::{self, runtime::Builder};
 
 use shadowsocks_service as ss;
+use ss::config::ProtocolType;
 
 use native_windows_gui as nwg;
 
@@ -85,18 +86,41 @@ impl Client {
             .local_addr
             .parse::<ss::shadowsocks::config::ServerAddr>()
         {
-            Ok(cipher) => cipher,
+            Ok(addr) => addr,
             Err(_e) => anyhow::bail!("Wrong local address"),
         };
-        let lc = ss::config::LocalInstanceConfig::with_local_config(
-            ss::config::LocalConfig::new_with_addr(laddr, ss::config::ProtocolType::Socks),
-        );
 
-        ssconfig.local.push(lc);
+        // ← منفذ بروتوكول SOCKS5 (كما في الإعدادات)
+        let socks_addr = laddr.clone();
+
+        // ← منفذ بروتوكول HTTP = (socks_port + 1)
+        let http_addr = match laddr {
+            ss::shadowsocks::config::ServerAddr::SocketAddr(sa) => {
+                let port = sa.port().saturating_add(1);
+                let mut http_sa = sa;
+                http_sa.set_port(port);
+                ss::shadowsocks::config::ServerAddr::SocketAddr(http_sa)
+            },
+            ss::shadowsocks::config::ServerAddr::DomainName(dm, port) => {
+                ss::shadowsocks::config::ServerAddr::DomainName(dm, port + 1)
+            }
+        };
+
+        // SOCKS5 Local Config
+        let lc_socks = ss::config::LocalInstanceConfig::with_local_config(
+            ss::config::LocalConfig::new_with_addr(socks_addr, ProtocolType::Socks),
+        );
+        ssconfig.local.push(lc_socks);
+
+        // HTTP Local Config
+        let lc_http = ss::config::LocalInstanceConfig::with_local_config(
+            ss::config::LocalConfig::new_with_addr(http_addr, ProtocolType::Http),
+        );
+        ssconfig.local.push(lc_http);
 
         self.th = Some(thread::spawn(move || {
             if let Err(_e) = serve(ssconfig, notify) {
-                //error!("{}", e);
+                // error!("{}", e);
             }
         }));
 
